@@ -1,7 +1,7 @@
 {
   "id": "cloudphone",
   "name": "CloudPhone Plugin",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "OpenClaw CloudPhone plugin that exposes CloudPhone OpenAPI capabilities for user info, device management, and UI automation as agent tools.",
   "configSchema": {
     "type": "object",
@@ -10,7 +10,7 @@
       "baseUrl": {
         "type": "string",
         "description": "CloudPhone API base URL (without /openapi/v1)",
-        "default": "https://whateverai.ai/ai"
+        "default": "https://ai.suqi.tech/ai"
       },
       "apikey": {
         "type": "string",
@@ -26,7 +26,7 @@
   "uiHints": {
     "baseUrl": {
       "label": "API Base URL",
-      "placeholder": "https://whateverai.ai/ai (without /openapi/v1)"
+      "placeholder": "https://ai.suqi.tech/ai (without /openapi/v1)"
     },
     "apikey": {
       "label": "Authorization / ApiKey",
