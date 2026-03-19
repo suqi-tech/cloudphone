@@ -24,7 +24,14 @@ openclaw plugins update @suqiai/cloudphone
 
 ### 2. Configure the plugin
 
+You can configure the plugin in either of the following ways.
+
+#### Option A: Configuration file (openclaw.json)
+
 Add the following configuration to `openclaw.json`:
+
+- **baseUrl**: Use the default value; keep it as `https://ai.suqi.tech/ai` and you do not need to change it.
+- **apikey**: Obtain your API Key by logging in or signing up at [https://ai.suqi.tech](https://ai.suqi.tech), then add it in your account/settings and paste it into the `apikey` field below.
 
 ```json
 {
@@ -34,13 +41,27 @@ Add the following configuration to `openclaw.json`:
         "enabled": true,
         "config": {
           "baseUrl": "https://ai.suqi.tech/ai",
-          "apikey": "your-api-key"
+          "apikey": "the apikey you can get from the user center of this website"
         }
       }
     }
   }
 }
 ```
+
+#### Option B: OpenClaw Console UI
+
+You can also configure the CloudPhone plugin in the OpenClaw console UI:
+
+1. Open the OpenClaw console in your browser.
+2. Go to the Plugins section, find **CloudPhone** and enable it.
+3. Set **baseUrl** (keep the default `https://ai.suqi.tech/ai`) and **apikey** (from [https://ai.suqi.tech](https://ai.suqi.tech) after login or sign-up, in your account/settings).
+
+Screenshots:
+
+![OpenClaw Console — Plugins](https://github.com/suqi-tech/cloudphone/blob/main/assets/0.jpg)
+
+![OpenClaw Console — CloudPhone config](https://github.com/suqi-tech/cloudphone/blob/main/assets/1.jpg)
 
 ### 3. Restart the Gateway
 

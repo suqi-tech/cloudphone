@@ -24,7 +24,14 @@ openclaw plugins update @suqiai/cloudphone
 
 ### 2. 配置插件
 
+可通过以下两种方式之一配置插件。
+
+#### 方式一：配置文件（openclaw.json）
+
 在 `openclaw.json` 中添加以下配置：
+
+- **baseUrl**：使用默认值即可，保持为 `https://ai.suqi.tech/ai` 不需修改。
+- **apikey**：在 [https://ai.suqi.tech](https://ai.suqi.tech) 登录或注册后，在账户/设置中获取 API Key，填入下方 `apikey` 字段。
 
 ```json
 {
@@ -34,13 +41,27 @@ openclaw plugins update @suqiai/cloudphone
         "enabled": true,
         "config": {
           "baseUrl": "https://ai.suqi.tech/ai",
-          "apikey": "your-api-key"
+          "apikey": "你可以在该网站的用户中心获取 API 密钥"
         }
       }
     }
   }
 }
 ```
+
+#### 方式二：OpenClaw 控制台 UI
+
+也可以在 OpenClaw 控制台页面上配置 CloudPhone 插件：
+
+1. 在浏览器中打开 OpenClaw 控制台。
+2. 进入「插件」相关页面，找到 **CloudPhone** 并启用。
+3. 填写 **baseUrl**（保持默认 `https://ai.suqi.tech/ai` 即可）和 **apikey**（在 [https://ai.suqi.tech](https://ai.suqi.tech) 登录或注册后，于账户/设置中获取）。
+
+参考截图：
+
+![OpenClaw 控制台 — 插件](https://github.com/suqi-tech/cloudphone/blob/main/assets/0.jpg)
+
+![OpenClaw 控制台 — CloudPhone 配置](https://github.com/suqi-tech/cloudphone/blob/main/assets/1.jpg)
 
 ### 3. 重启 Gateway
 
