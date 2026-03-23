@@ -266,7 +266,7 @@ selector  : string  - 元素选择器（在元素出现/消失条件下使用）
 
 ```text
 device_id : string - 设备 ID（必填）
-format    : string - 快照格式："screenshot" | "ui_tree" | "both"，默认 screenshot
+format    : string - 快照格式："screenshot"（当前仅支持 screenshot）
 ```
 
 ### `cloudphone_render_image`

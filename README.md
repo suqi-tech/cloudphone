@@ -266,7 +266,7 @@ selector  : string  - Element selector used with appear/disappear conditions
 
 ```text
 device_id : string - Device ID (required)
-format    : string - Snapshot format: "screenshot" | "ui_tree" | "both", default screenshot
+format    : string - Snapshot format: "screenshot" (currently only screenshot is supported)
 ```
 
 ### `cloudphone_render_image`
