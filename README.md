@@ -205,7 +205,14 @@ Yes. Each call returns an independent `task_id`. You can call `cloudphone_task_r
 
 ## Changelog
 
-Current version: **v2026.3.31**
+Current version: **v2026.4.1**
+
+### v2026.4.1
+
+- Added `cloudphone_execute_and_wait` to auto-chain task submission and the first result polling
+- Clarified tool behavior and call sequence documentation for task execution and polling
+- Updated `.gitignore` with `docs/` and `openspec/` entries for cleaner project management
+- Synced package/plugin/doc version references to `v2026.4.1`
 
 ### v2026.3.31
 
