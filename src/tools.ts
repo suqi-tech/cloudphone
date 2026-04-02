@@ -42,9 +42,65 @@ export interface ToolDefinition {
 
 let runtimeConfig: CloudphonePluginConfig = {};
 
+interface InFlightTaskRecord {
+  agentKey: string;
+  taskId: number | null;
+  reservedAt: number;
+}
+
+interface TaskPollingState {
+  taskId: number;
+  thinkingHistory: string[];
+  latestResult: unknown;
+  latestStatus: string;
+}
+
+const inFlightByAgentKey = new Map<string, InFlightTaskRecord>();
+const agentKeyByTaskId = new Map<number, string>();
+const taskPollingStateByTaskId = new Map<number, TaskPollingState>();
+
 /** Inject runtime config during plugin registration. */
 export function setConfig(config: CloudphonePluginConfig): void {
   runtimeConfig = config;
+}
+
+function getAgentKeyFromParams(params: Record<string, unknown>): string {
+  if (typeof params.session_id === "string" && params.session_id.trim()) {
+    return `session:${params.session_id.trim()}`;
+  }
+  if (typeof params.device_id === "string" && params.device_id.trim()) {
+    return `device:${params.device_id.trim()}`;
+  }
+  if (params.user_device_id !== undefined && params.user_device_id !== null) {
+    return `user_device:${String(params.user_device_id)}`;
+  }
+  return "default-agent";
+}
+
+function normalizeTaskId(value: unknown): number | null {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return parsed;
+}
+
+function releaseInFlightByTask(taskId: number): void {
+  const agentKey = agentKeyByTaskId.get(taskId);
+  if (!agentKey) {
+    taskPollingStateByTaskId.delete(taskId);
+    return;
+  }
+  const current = inFlightByAgentKey.get(agentKey);
+  if (current?.taskId === taskId) {
+    inFlightByAgentKey.delete(agentKey);
+  }
+  agentKeyByTaskId.delete(taskId);
+  taskPollingStateByTaskId.delete(taskId);
+}
+
+function isTerminalTaskStatus(status: string): boolean {
+  return status === "success" || status === "done" || status === "error" || status === "timeout";
 }
 
 function normalizeBaseUrl(baseUrl: string): string {
@@ -272,9 +328,15 @@ const executeAgentTaskTool: ToolDefinition = {
   description:
     "Submit a natural language instruction to the cloud phone AI Agent for execution. " +
     "The backend parses the instruction, dispatches the task to the target device, and returns a taskId immediately. " +
-    "Call cloudphone_task_result with the returned taskId to stream the thinking process and final result. " +
+    "Prefer cloudphone_execute_and_wait to auto-chain the first cloudphone_task_result polling call. " +
+    "Otherwise call cloudphone_task_result with the returned taskId to stream progress and final result. " +
     "device_id (recommended) or user_device_id must be provided to identify the target device. " +
-    "If neither is given, the backend will use the default device bound to the current user.",
+    "If neither is given, the backend will use the default device bound to the current user.\n\n" +
+    "IMPORTANT constraints — strictly follow these rules:\n" +
+    "1. ONLY submit tasks that the user has explicitly requested. Do NOT add extra steps or autonomous follow-up actions on your own initiative.\n" +
+    "2. NEVER include screenshot or screen-capture instructions (e.g. '截图', '截屏', 'take a screenshot'). The backend agent cannot return image data through this channel; such instructions waste time and return no useful result.\n" +
+    "3. NEVER submit a new task for the same request while a previous cloudphone_execute call is still being processed by cloudphone_task_result.\n" +
+    "4. If a task fails or returns an error, you may retry cloudphone_execute with a clearer or revised instruction. Retry at most 2 times for the same user request before reporting failure.",
   parameters: {
     type: "object",
     properties: {
@@ -303,6 +365,27 @@ const executeAgentTaskTool: ToolDefinition = {
     required: ["instruction"],
   },
   execute: async (_id, params) => {
+    const agentKey = getAgentKeyFromParams(params);
+    const inFlight = inFlightByAgentKey.get(agentKey);
+    if (inFlight) {
+      return toJsonText({
+        ok: false,
+        code: "AGENT_BUSY",
+        status: "running",
+        message:
+          "Agent already has an in-flight task. Call cloudphone_task_result and wait for terminal status before executing a new task.",
+        agent_id: agentKey,
+        blocking_task_id: inFlight.taskId,
+      });
+    }
+
+    const reservation: InFlightTaskRecord = {
+      agentKey,
+      taskId: null,
+      reservedAt: Date.now(),
+    };
+    inFlightByAgentKey.set(agentKey, reservation);
+
     const baseUrl = normalizeBaseUrl(runtimeConfig.baseUrl ?? "https://ai.suqi.tech/ai");
     const url = `${baseUrl}/openapi/v1/devices/execute`;
     const timeout = runtimeConfig.timeout ?? 30000;
@@ -348,6 +431,7 @@ const executeAgentTaskTool: ToolDefinition = {
       );
 
       if (!response.ok) {
+        inFlightByAgentKey.delete(agentKey);
         return toJsonText({
           ok: false,
           httpStatus: response.status,
@@ -358,20 +442,36 @@ const executeAgentTaskTool: ToolDefinition = {
       const resp = (await response.json()) as Record<string, unknown>;
 
       if (resp.status === "fail") {
+        inFlightByAgentKey.delete(agentKey);
         return toJsonText({
           ok: false,
           message: String(resp.message ?? "Task execution failed"),
         });
       }
 
+      const normalizedTaskId = normalizeTaskId(resp.taskId);
+      if (!normalizedTaskId) {
+        inFlightByAgentKey.delete(agentKey);
+        return toJsonText({
+          ok: false,
+          code: "INVALID_EXECUTE_RESPONSE",
+          message: "Task submitted but backend response did not include a valid taskId",
+        });
+      }
+
+      reservation.taskId = normalizedTaskId;
+      agentKeyByTaskId.set(normalizedTaskId, agentKey);
+
       return toJsonText({
         ok: true,
-        task_id: resp.taskId,
+        task_id: normalizedTaskId,
         session_id: resp.sessionId,
         status: resp.status,
         message: resp.message,
+        agent_id: agentKey,
       });
     } catch (err) {
+      inFlightByAgentKey.delete(agentKey);
       const elapsed = Date.now() - started;
       const message = err instanceof Error ? err.message : String(err);
       console.error(
@@ -390,38 +490,239 @@ interface SseEvent {
   data: string;
 }
 
-/** Parse raw SSE text lines into an event object. */
+/**
+ * Parse raw SSE text into event objects.
+ *
+ * Supports two formats:
+ *   - Standard SSE:  "event: xxx\ndata: {...}"
+ *   - Backend format: "data: {\"event\":\"xxx\",\"data\":{...}}"
+ *     (event type is embedded inside the JSON data payload)
+ */
 function parseSseChunk(chunk: string): SseEvent[] {
   const events: SseEvent[] = [];
   const blocks = chunk.split(/\n\n/);
   for (const block of blocks) {
     const lines = block.split(/\n/);
-    let event = "message";
-    let data = "";
+    let sseEventField = "";
+    let rawData = "";
     for (const line of lines) {
       if (line.startsWith("event:")) {
-        event = line.slice(6).trim();
+        sseEventField = line.slice(6).trim();
       } else if (line.startsWith("data:")) {
-        data += line.slice(5).trim();
+        rawData += line.slice(5);
       }
     }
-    if (data) {
-      events.push({ event, data });
+    if (!rawData) continue;
+
+    // When no standard event: field, try to extract event from the JSON payload.
+    // Backend format: data:{"event":"task_result","data":{...}}
+    let event = sseEventField || "message";
+    let data = rawData;
+    if (!sseEventField) {
+      try {
+        const parsed = JSON.parse(rawData) as Record<string, unknown>;
+        if (parsed && typeof parsed.event === "string") {
+          event = parsed.event;
+          data =
+            typeof parsed.data === "string"
+              ? parsed.data
+              : JSON.stringify(parsed.data ?? {});
+        }
+      } catch {
+        // keep rawData as-is
+      }
     }
+    events.push({ event, data });
   }
   return events;
 }
 
 /**
- * Consume the SSE task result stream and aggregate thinking + final result.
+ * Consume a single SSE stream attempt for the given task.
+ * Returns structured result along with a flag indicating whether a retry is appropriate.
+ */
+async function consumeSseStream(
+  url: string,
+  headers: Record<string, string>,
+  taskId: number,
+  attemptTimeoutMs: number
+): Promise<{
+  thinkingDelta: string[];
+  taskResult: unknown;
+  finalStatus: string;
+  errorMessage: string | undefined;
+  pollWindowElapsed: boolean;
+}> {
+  const thinkingLines: string[] = [];
+  let taskResult: unknown = null;
+  let finalStatus = "running";
+  let errorMessage: string | undefined;
+  let pollWindowElapsed = false;
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedByWindow = false;
+  try {
+    const controller =
+      typeof AbortController !== "undefined" ? new AbortController() : undefined;
+    if (controller) {
+      timer = setTimeout(() => {
+        timedByWindow = true;
+        console.warn(
+          `${LOG_PREFIX} cloudphone_task_result poll window elapsed after ${attemptTimeoutMs}ms task_id=${taskId}`
+        );
+        controller.abort();
+      }, attemptTimeoutMs);
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers,
+      signal: controller?.signal,
+    });
+
+    if (!response.ok) {
+      return {
+        thinkingDelta: thinkingLines,
+        taskResult,
+        finalStatus: "error",
+        errorMessage: `HTTP error: ${response.status} ${response.statusText}`,
+        pollWindowElapsed: false,
+      };
+    }
+
+    if (!response.body) {
+      return {
+        thinkingDelta: thinkingLines,
+        taskResult,
+        finalStatus: "error",
+        errorMessage: "Response body is null",
+        pollWindowElapsed: false,
+      };
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+    let done = false;
+
+    while (!done) {
+      const { value, done: readerDone } = await reader.read();
+      if (readerDone) {
+        done = true;
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // Process complete SSE blocks (separated by double newline)
+      const lastDoubleNewline = buffer.lastIndexOf("\n\n");
+      if (lastDoubleNewline !== -1) {
+        const toProcess = buffer.slice(0, lastDoubleNewline + 2);
+        buffer = buffer.slice(lastDoubleNewline + 2);
+
+        const events = parseSseChunk(toProcess);
+        for (const evt of events) {
+          const evtName = evt.event;
+          const evtData = evt.data;
+
+          console.log(
+            `${LOG_PREFIX} cloudphone_task_result event=${evtName} data=${evtData.slice(0, 120)} task_id=${taskId}`
+          );
+
+          if (evtName === "agent_thinking") {
+            try {
+              const parsed = JSON.parse(evtData) as Record<string, unknown>;
+              // agent_thinking may carry an error sub-event
+              if (parsed.event_type === "error" && parsed.error) {
+                const errObj = parsed.error as Record<string, unknown>;
+                errorMessage = String(errObj.message ?? parsed.event_type ?? "Agent error");
+                finalStatus = "error";
+                done = true;
+                break;
+              }
+              const content = String(
+                parsed.content ?? parsed.message ?? parsed.data ?? evtData
+              );
+              thinkingLines.push(content);
+            } catch {
+              thinkingLines.push(evtData);
+            }
+          } else if (evtName === "task_result") {
+            try {
+              const parsed = JSON.parse(evtData) as Record<string, unknown>;
+              taskResult = parsed;
+              finalStatus =
+                typeof parsed.status === "string" ? parsed.status : "success";
+              // Append the agent's final message as a thinking summary
+              if (parsed.message && typeof parsed.message === "string") {
+                thinkingLines.push(parsed.message);
+              }
+            } catch {
+              taskResult = evtData;
+              finalStatus = "success";
+            }
+          } else if (evtName === "done") {
+            finalStatus = finalStatus === "success" ? "success" : "done";
+            done = true;
+            break;
+          } else if (evtName === "error") {
+            try {
+              const parsed = JSON.parse(evtData) as Record<string, unknown>;
+              errorMessage = String(parsed.message ?? parsed.error ?? evtData);
+            } catch {
+              errorMessage = evtData;
+            }
+            finalStatus = "error";
+            done = true;
+            break;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const messageLower = message.toLowerCase();
+    const isNetworkError =
+      !timedByWindow &&
+      (message.includes("abort") ||
+        messageLower.includes("timeout") ||
+        messageLower.includes("network") ||
+        messageLower.includes("econnreset") ||
+        messageLower.includes("econnrefused"));
+
+    if (timedByWindow) {
+      pollWindowElapsed = true;
+      finalStatus = "running";
+    } else {
+      console.error(
+        `${LOG_PREFIX} cloudphone_task_result stream error task_id=${taskId}: ${message}`
+      );
+
+      if (isNetworkError) {
+        finalStatus = "timeout";
+        errorMessage = `Stream interrupted: ${message}`;
+      } else {
+        finalStatus = "error";
+        errorMessage = `Stream error: ${message}`;
+      }
+    }
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+
+  return { thinkingDelta: thinkingLines, taskResult, finalStatus, errorMessage, pollWindowElapsed };
+}
+
+/**
+ * Consume one 10s SSE polling window and return delta updates.
  */
 const getTaskResultTool: ToolDefinition = {
   name: "cloudphone_task_result",
   description:
     "Stream the execution progress and final result of a cloud phone Agent task. " +
     "Call this after cloudphone_execute with the returned task_id. " +
-    "The tool subscribes to the backend SSE stream and returns aggregated agent thinking and the final task result. " +
-    "The stream ends when a 'done' or 'error' event is received, or when timeout_ms elapses.",
+    "The tool subscribes to the backend SSE stream for a 10-second polling window and returns the thinking delta for that window. " +
+    "Keep calling this tool every ~10 seconds until status reaches terminal: success, done, or error.",
   parameters: {
     type: "object",
     properties: {
@@ -429,18 +730,19 @@ const getTaskResultTool: ToolDefinition = {
         type: "number",
         description: "Task ID returned by cloudphone_execute.",
       },
-      timeout_ms: {
-        type: "number",
-        description: "Maximum time to wait for the stream to complete in milliseconds. Default is 300000 (5 minutes).",
-      },
     },
     required: ["task_id"],
   },
   execute: async (_id, params) => {
     const taskId = Number(params.task_id);
-    const timeoutMs = Number(params.timeout_ms ?? 300000);
+    const normalizedTaskId = normalizeTaskId(taskId);
+    if (!normalizedTaskId) {
+      return toJsonText({ ok: false, status: "error", message: "Invalid task_id" });
+    }
+
+    const pollWindowMs = 10000;
     const baseUrl = normalizeBaseUrl(runtimeConfig.baseUrl ?? "https://ai.suqi.tech/ai");
-    const url = `${baseUrl}/openapi/v1/devices/result/${taskId}`;
+    const url = `${baseUrl}/openapi/v1/devices/result/${normalizedTaskId}`;
 
     const headers: Record<string, string> = {
       Accept: "text/event-stream",
@@ -450,160 +752,123 @@ const getTaskResultTool: ToolDefinition = {
       headers.Authorization = runtimeConfig.apikey;
     }
 
-    const started = Date.now();
     console.log(
-      `${LOG_PREFIX} cloudphone_task_result start task_id=${taskId} timeout=${timeoutMs}ms`
+      `${LOG_PREFIX} cloudphone_task_result start task_id=${normalizedTaskId} poll_window=${pollWindowMs}ms`
     );
 
-    const thinkingLines: string[] = [];
-    let taskResult: unknown = null;
-    let finalStatus = "unknown";
-    let errorMessage: string | undefined;
+    const pollingState =
+      taskPollingStateByTaskId.get(normalizedTaskId) ??
+      ({
+        taskId: normalizedTaskId,
+        thinkingHistory: [],
+        latestResult: null,
+        latestStatus: "running",
+      } as TaskPollingState);
+    taskPollingStateByTaskId.set(normalizedTaskId, pollingState);
 
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const controller =
-        typeof AbortController !== "undefined" ? new AbortController() : undefined;
-      if (controller) {
-        timer = setTimeout(() => {
-          console.warn(`${LOG_PREFIX} cloudphone_task_result timeout after ${timeoutMs}ms task_id=${taskId}`);
-          controller.abort();
-        }, timeoutMs);
-      }
+    const { thinkingDelta, finalStatus, errorMessage, taskResult, pollWindowElapsed } =
+      await consumeSseStream(url, headers, normalizedTaskId, pollWindowMs);
 
-      const response = await fetch(url, {
-        method: "GET",
-        headers,
-        signal: controller?.signal,
-      });
+    console.log(
+      `${LOG_PREFIX} cloudphone_task_result done task_id=${normalizedTaskId} status=${finalStatus} delta_count=${thinkingDelta.length}`
+    );
 
-      if (!response.ok) {
-        return toJsonText({
-          ok: false,
-          httpStatus: response.status,
-          message: `HTTP error: ${response.status} ${response.statusText}`,
-        });
-      }
+    if (thinkingDelta.length > 0) {
+      pollingState.thinkingHistory.push(...thinkingDelta);
+    }
+    if (taskResult !== null && taskResult !== undefined) {
+      pollingState.latestResult = taskResult;
+    }
+    pollingState.latestStatus = finalStatus;
 
-      if (!response.body) {
-        return toJsonText({ ok: false, message: "Response body is null" });
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder("utf-8");
-      let buffer = "";
-      let done = false;
-
-      while (!done) {
-        const { value, done: readerDone } = await reader.read();
-        if (readerDone) {
-          done = true;
-          break;
-        }
-
-        buffer += decoder.decode(value, { stream: true });
-
-        // Process complete SSE blocks (separated by double newline)
-        const lastDoubleNewline = buffer.lastIndexOf("\n\n");
-        if (lastDoubleNewline !== -1) {
-          const toProcess = buffer.slice(0, lastDoubleNewline + 2);
-          buffer = buffer.slice(lastDoubleNewline + 2);
-
-          const events = parseSseChunk(toProcess);
-          for (const evt of events) {
-            const evtName = evt.event;
-            const evtData = evt.data;
-
-            console.log(
-              `${LOG_PREFIX} cloudphone_task_result event=${evtName} data=${safeUrlForLog(evtData.slice(0, 100))} task_id=${taskId}`
-            );
-
-            if (evtName === "agent_thinking") {
-              try {
-                const parsed = JSON.parse(evtData) as Record<string, unknown>;
-                const content = String(parsed.content ?? parsed.data ?? evtData);
-                thinkingLines.push(content);
-              } catch {
-                thinkingLines.push(evtData);
-              }
-            } else if (evtName === "task_result") {
-              try {
-                taskResult = JSON.parse(evtData);
-              } catch {
-                taskResult = evtData;
-              }
-              finalStatus = "success";
-            } else if (evtName === "done") {
-              finalStatus = "done";
-              done = true;
-              break;
-            } else if (evtName === "error") {
-              try {
-                const parsed = JSON.parse(evtData) as Record<string, unknown>;
-                errorMessage = String(parsed.message ?? parsed.error ?? evtData);
-              } catch {
-                errorMessage = evtData;
-              }
-              finalStatus = "error";
-              done = true;
-              break;
-            }
-          }
-        }
-      }
-
-      const elapsed = Date.now() - started;
-      console.log(
-        `${LOG_PREFIX} cloudphone_task_result done task_id=${taskId} status=${finalStatus} elapsed=${elapsed}ms thinking_count=${thinkingLines.length}`
-      );
-
-      if (finalStatus === "error") {
-        return toJsonText({
-          ok: false,
-          task_id: taskId,
-          status: "error",
-          message: errorMessage ?? "Task failed with error",
-          thinking: thinkingLines,
-        });
-      }
-
-      return toJsonText({
-        ok: true,
-        task_id: taskId,
-        status: finalStatus,
-        thinking: thinkingLines,
-        result: taskResult,
-      });
-    } catch (err) {
-      const elapsed = Date.now() - started;
-      const message = err instanceof Error ? err.message : String(err);
-      const isTimeout = message.includes("abort") || message.toLowerCase().includes("timeout");
-      console.error(
-        `${LOG_PREFIX} cloudphone_task_result error after ${elapsed}ms task_id=${taskId}: ${message}`
-      );
-
-      if (isTimeout) {
-        return toJsonText({
-          ok: false,
-          task_id: taskId,
-          status: "timeout",
-          message: `Stream timed out after ${elapsed}ms`,
-          thinking: thinkingLines,
-          result: taskResult,
-        });
-      }
-
+    if (finalStatus === "error") {
+      releaseInFlightByTask(normalizedTaskId);
       return toJsonText({
         ok: false,
-        task_id: taskId,
+        task_id: normalizedTaskId,
         status: "error",
-        message: `Stream error: ${message}`,
-        thinking: thinkingLines,
-        result: taskResult,
+        message: errorMessage ?? "Task failed with error",
+        thinking: thinkingDelta,
+        result: pollingState.latestResult,
       });
-    } finally {
-      if (timer) clearTimeout(timer);
     }
+
+    if (finalStatus === "timeout") {
+      return toJsonText({
+        ok: false,
+        task_id: normalizedTaskId,
+        status: "timeout",
+        message: errorMessage ?? "Stream interrupted in current polling window",
+        thinking: thinkingDelta,
+        result: pollingState.latestResult,
+      });
+    }
+
+    if (!isTerminalTaskStatus(finalStatus)) {
+      return toJsonText({
+        ok: false,
+        code: "TASK_NOT_FINISHED",
+        task_id: normalizedTaskId,
+        status: "running",
+        message: pollWindowElapsed
+          ? "Polling window completed. Continue calling cloudphone_task_result every 10s until terminal status."
+          : "Task has not reached terminal status yet. Continue polling cloudphone_task_result.",
+        thinking: thinkingDelta,
+        result: pollingState.latestResult,
+      });
+    }
+
+    releaseInFlightByTask(normalizedTaskId);
+
+    return toJsonText({
+      ok: true,
+      task_id: normalizedTaskId,
+      status: finalStatus,
+      thinking: thinkingDelta,
+      result: pollingState.latestResult,
+    });
+  },
+};
+
+function parseJsonResult(result: McpToolResult): Record<string, unknown> {
+  const text = result.content[0]?.type === "text" ? result.content[0].text : "{}";
+  try {
+    return JSON.parse(text ?? "{}") as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+const executeAndPollTool: ToolDefinition = {
+  name: "cloudphone_execute_and_wait",
+  description:
+    "Submit a task with cloudphone_execute and automatically call cloudphone_task_result once. " +
+    "This tool returns the first 10-second polling window result so callers do not need to manually chain the first poll.",
+  parameters: executeAgentTaskTool.parameters,
+  execute: async (id, params) => {
+    const executeResult = parseJsonResult(await executeAgentTaskTool.execute(id, params));
+    if (executeResult.ok !== true) {
+      return toJsonText(executeResult);
+    }
+    const taskId = normalizeTaskId(executeResult.task_id);
+    if (!taskId) {
+      return toJsonText({
+        ok: false,
+        code: "INVALID_EXECUTE_RESPONSE",
+        message: "cloudphone_execute returned no valid task_id",
+      });
+    }
+    const firstPoll = parseJsonResult(
+      await getTaskResultTool.execute(`${id}:poll`, {
+        task_id: taskId,
+      })
+    );
+    return toJsonText({
+      ok: firstPoll.ok,
+      task_id: taskId,
+      execute: executeResult,
+      task_result: firstPoll,
+    });
   },
 };
 
@@ -613,5 +878,6 @@ export const tools: ToolDefinition[] = [
   listDevicesTool,
   getDeviceInfoTool,
   executeAgentTaskTool,
+  executeAndPollTool,
   getTaskResultTool,
 ];

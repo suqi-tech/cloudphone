@@ -28,7 +28,7 @@ Set **`apikey`** in `plugins.entries.cloudphone.config`. The plugin uses built-i
 
 Add the following configuration to `openclaw.json`:
 
-- **apikey**: Obtain your API Key by logging in or signing up at [https://ai.suqi.tech](https://ai.suqi.tech), then add it in your account/settings and paste it into the `apikey` field below.
+- **apikey**: Obtain your API Key by logging in or signing up at [https://ai.suqi.tech](https://ai.suqi.tech), then add it in your account/settings.
 
 ```json
 {
@@ -65,11 +65,13 @@ openclaw gateway restart
 
 ## How It Works
 
-This plugin exposes the CloudPhone backend AI Agent as two high-level tools:
+This plugin exposes the CloudPhone backend AI Agent as three high-level tools:
 
 1. **`cloudphone_execute`** — Submit a natural language instruction to the backend. The backend handles LLM interpretation, cloud phone UI automation (observe → plan → act loop), and dispatches all actions automatically. Returns a `task_id` immediately.
 
-2. **`cloudphone_task_result`** — Subscribe to the SSE stream for a task. Streams the agent's thinking process in real time and returns the final task result when execution completes.
+2. **`cloudphone_execute_and_wait`** — Auto-chain call: execute `cloudphone_execute`, then automatically run one `cloudphone_task_result` poll and return the first 10-second window result.
+
+3. **`cloudphone_task_result`** — Subscribe to SSE for a task; each call consumes one 10-second window and returns the thinking delta for that window until terminal status.
 
 The agent no longer needs to directly control UI coordinates, manage screenshots, or call individual tap/swipe/input tools. The backend AI Agent handles the full automation loop.
 
@@ -79,7 +81,7 @@ The agent no longer needs to directly control UI coordinates, manage screenshots
 |------|------|------|--------|------|
 | `apikey` | string | Yes | - | Authorization credential (ApiKey) |
 
-> You can obtain `apikey` by logging in or signing up at [https://ai.suqi.tech](https://ai.suqi.tech), then find it in your account/settings.
+> Obtain your API Key by logging in or signing up at [https://ai.suqi.tech](https://ai.suqi.tech), then find it in your account/settings.
 
 Optional fields such as `baseUrl` and `timeout` are documented in `openclaw.plugin.json` and use built-in defaults when omitted.
 
@@ -100,7 +102,8 @@ After the plugin is installed, the agent automatically gets the following tools.
 | Tool | Description |
 |------|------|
 | `cloudphone_execute` | Submit a natural language instruction; returns task_id immediately |
-| `cloudphone_task_result` | Stream agent thinking and final result for a task via SSE |
+| `cloudphone_execute_and_wait` | Auto-chain execute + first task_result poll |
+| `cloudphone_task_result` | Return 10s-window thinking delta and current task status |
 
 ## Usage Examples
 
@@ -112,8 +115,8 @@ After installation and configuration, you can control cloud phones through natur
 
 The agent will:
 1. Call `cloudphone_list_devices` to get the device ID
-2. Call `cloudphone_execute` with the instruction → receives `task_id`
-3. Call `cloudphone_task_result` with `task_id` → streams thinking and returns result
+2. Call `cloudphone_execute_and_wait` to submit and trigger the first poll automatically
+3. If status is `running`, continue calling `cloudphone_task_result` every ~10 seconds until `success`/`done`/`error`
 
 ### Check device status
 
@@ -124,14 +127,14 @@ The agent will call `cloudphone_list_devices` and return the device list.
 ### Submit a task and wait for completion
 
 ```text
-Agent: cloudphone_execute
+Agent: cloudphone_execute_and_wait
   instruction: "打开抖音，搜索美食视频并点赞第一条"
   device_id: "abc123"
-→ returns: { ok: true, task_id: 42 }
+→ returns: { ok: false, task_result: { status: "running", thinking: [...] } }
 
 Agent: cloudphone_task_result
   task_id: 42
-→ streams agent thinking, returns: { ok: true, status: "done", result: {...} }
+→ returns 10s-window delta until terminal: { ok: true, status: "done", result: {...} }
 ```
 
 ## Tool Parameters
@@ -150,7 +153,6 @@ lang           : string  - Language hint: "cn" (default) or "en"
 
 ```text
 task_id    : number - Task ID from cloudphone_execute (required)
-timeout_ms : number - Max wait time in milliseconds (default 300000)
 ```
 
 **Response fields:**
@@ -159,7 +161,7 @@ timeout_ms : number - Max wait time in milliseconds (default 300000)
 ok         : boolean - Whether the operation succeeded
 task_id    : number  - Echo of the input task_id
 status     : string  - "done" | "success" | "error" | "timeout"
-thinking   : string[] - Aggregated agent thinking steps
+thinking   : string[] - New thinking lines from the current 10-second polling window (delta)
 result     : object  - Final task result from the backend
 message    : string  - Error message (when status is "error" or "timeout")
 ```
@@ -185,9 +187,9 @@ user_device_id : number - User device ID (required)
 
 Make sure `plugins.entries.cloudphone.enabled` is set to `true` in `openclaw.json`, then restart the Gateway.
 
-**Q: `cloudphone_execute` returns ok but `cloudphone_task_result` times out.**
+**Q: Why does `cloudphone_task_result` return `running`?**
 
-The default timeout is 5 minutes (300,000 ms). For long-running tasks you can increase `timeout_ms`. If the task consistently times out, check that the backend service is reachable and the device is online.
+This is expected when the current 10-second polling window has not reached terminal status. Keep calling `cloudphone_task_result` every ~10 seconds until `success`/`done`/`error`.
 
 **Q: A tool call fails with a request error or authorization failure.**
 
@@ -201,11 +203,28 @@ Log in or sign up at [https://ai.suqi.tech](https://ai.suqi.tech) and get your A
 
 **Q: Does `cloudphone_execute` support concurrent tasks?**
 
-Yes. Each call returns an independent `task_id`. You can call `cloudphone_task_result` with each `task_id` separately.
+No, not for the same agent context. The plugin enforces serial execution per agent key (`session_id`, then `device_id`, then `user_device_id`, otherwise default).  
+If you call `cloudphone_execute` before the previous task reaches terminal status in `cloudphone_task_result`, it returns `code: "AGENT_BUSY"` with `blocking_task_id`.
+
+Required call order:
+
+1. `cloudphone_execute_and_wait` (auto-runs the first poll)
+2. `cloudphone_task_result` (if status is `running`, continue polling until terminal: `success`/`done`/`error`)
+3. Next `cloudphone_execute`
 
 ## Changelog
 
-Current version: **v2026.4.1**
+Current version: **v2026.4.2**
+
+### v2026.4.2
+
+- Enforced per-device/session serial task execution: `cloudphone_execute` returns `AGENT_BUSY` when a task is still in flight until `cloudphone_task_result` reaches a terminal status
+- Improved SSE parsing for both standard `event:`/`data:` framing and backend JSON-embedded event shapes
+- Strengthened tool descriptions with explicit guardrails (no autonomous extra steps, no screenshot-only requests, bounded retries)
+- Renamed npm package scope to `@suqiai/cloudphone` (commit `3c50f95`)
+- Added `src/tools.serial-gating.test.ts` (Node test runner); exclude `*.test.ts` from `tsc` output so `dist/` stays publish-clean
+- Updated built-in skill docs and README guidance for the execute → poll workflow
+- Synced package/plugin/doc version references to `v2026.4.2`
 
 ### v2026.4.1
 
@@ -231,7 +250,7 @@ Current version: **v2026.4.1**
 
 ### v2026.3.27
 
-- Summarized and aligned release notes based on target commit `fe5fb07`
+- Summarized and aligned release notes based on target commit `1da1031`
 - Synced package/plugin/doc version references to `v2026.3.27`
 
 ### v1.1.0
