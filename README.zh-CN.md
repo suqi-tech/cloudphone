@@ -90,6 +90,7 @@ Agent 不再需要直接控制 UI 坐标、管理截图或逐一调用 tap/swipe
 | `cloudphone_get_user_profile` | 获取当前用户基本信息 |
 | `cloudphone_list_devices` | 获取云手机设备列表，支持分页、关键字搜索和状态筛选 |
 | `cloudphone_get_device_info` | 获取指定设备的详细信息 |
+| `cloudphone_get_device_screenshot_url` | 按 `device_id` 获取最新截图 URL（默认可用；仅用户触发） |
 
 ### AI Agent 任务执行
 
@@ -175,6 +176,17 @@ size    : integer - 每页条数，默认 20
 user_device_id : number - 用户设备 ID（必填）
 ```
 
+### `cloudphone_get_device_screenshot_url`
+
+```text
+device_id : string - 设备唯一 ID（必填）
+```
+
+说明：
+- 插件安装后该工具默认可用，无需额外白名单开启。
+- 仅在用户明确要求获取截图 URL 时调用，禁止自主触发。
+- 返回的 `screenshot_url` 为上游原样透传，应视为敏感的临时凭证链接。
+
 ## 常见问题
 
 **Q: 安装后 Agent 找不到云手机工具？**
@@ -208,7 +220,15 @@ user_device_id : number - 用户设备 ID（必填）
 
 ## 更新日志
 
-当前版本：**v2026.4.2**
+当前版本：**v2026.4.3**
+
+### v2026.4.3
+
+- 新增 `cloudphone_get_device_screenshot_url`（默认可用；仅在用户明确要求时调用），对接 `POST /openapi/v1/devices/snapshot`
+- 在日志与 MCP 摘要中对 `screenshot_url` 去除查询串，工具返回的 JSON 仍保留完整 URL
+- 在 README 中补充该工具的参数说明、隐私与调用约束
+- 为截图 URL 成功与上游错误路径补充 Node 测试；调整 `tsconfig` 对 `*.test.ts` 的 include/exclude
+- 同步 package/plugin/doc 的版本标识到 `v2026.4.3`
 
 ### v2026.4.2
 
