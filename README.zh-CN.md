@@ -220,7 +220,13 @@ device_id : string - 设备唯一 ID（必填）
 
 ## 更新日志
 
-当前版本：**v2026.4.3**
+当前版本：**v2026.4.4**
+
+### v2026.4.4
+
+- 新增可选插件配置 `llmApiKey`、`llmBaseUrl`，用于云手机自动化默认使用的 LLM 提供商凭证与地址
+- 为 `cloudphone_execute` 增加可选参数 `api_key`、`base_url`（可覆盖插件级配置），并随请求体转发至后端
+- 同步 package/plugin/doc 的版本标识到 `v2026.4.4`
 
 ### v2026.4.3
 
