@@ -22,7 +22,7 @@ openclaw plugins update @suqiai/cloudphone
 
 ### 2. 配置插件
 
-只需在 `plugins.entries.cloudphone.config` 中填写 **`apikey`**，其余可选项由插件内置默认值覆盖。
+只需在 `plugins.entries.cloudphone.config` 中填写 **`apikey`**，其余可选项由插件内置默认值覆盖。若需要为云手机自动化 Agent（后端）指定**默认 LLM 提供商**，可额外填写可选的 **`llmApiKey`**、**`llmBaseUrl`**。
 
 #### 方式一：配置文件（openclaw.json）
 
@@ -45,11 +45,32 @@ openclaw plugins update @suqiai/cloudphone
 }
 ```
 
+可选 — 自动化默认 LLM 凭证（若后端已自带 LLM，可省略）：
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "cloudphone": {
+        "enabled": true,
+        "config": {
+          "apikey": "你的 CloudPhone apikey",
+          "llmApiKey": "your-zai-api-key",
+          "llmBaseUrl": "https://open.bigmodel.cn/api/paas/v4"
+        }
+      }
+    }
+  }
+}
+```
+
 #### 方式二：OpenClaw 控制台 UI
 
 1. 在浏览器中打开 OpenClaw 控制台。
 2. 进入「插件」相关页面，找到 **CloudPhone** 并启用。
 3. 填写 **apikey**（在 [https://ai.suqi.tech](https://ai.suqi.tech) 登录或注册后，于账户/设置中获取）。
+4. 如需插件级默认 LLM，可在表单中填写 **LLM API Key** 与 **LLM Base URL**。若使用 Z.AI，可参考 [Z.AI API 文档介绍页](https://docs.bigmodel.cn/cn/api/introduction) 申请 API Key。
+
 
 ### 3. 重启 Gateway
 
@@ -74,10 +95,16 @@ Agent 不再需要直接控制 UI 坐标、管理截图或逐一调用 tap/swipe
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `apikey` | string | 是 | — | Authorization 鉴权凭证（ApiKey） |
+| `llmApiKey` | string | 否 | — | 云手机自动化所用默认 LLM 提供商 API Key（敏感；不需要可不填）。若使用 Z.AI，可从 [Z.AI API 文档介绍页](https://docs.bigmodel.cn/cn/api/introduction) 获取。 |
+| `llmBaseUrl` | string | 否 | — | 云手机自动化所用默认 LLM 提供商 Base URL。Z.AI 示例：`https://open.bigmodel.cn/api/paas/v4`。 |
 
 > `apikey` 请在 [https://ai.suqi.tech](https://ai.suqi.tech) 登录或注册后，在账户/设置中获取。
 
-`baseUrl`、`timeout` 等可选字段见 `openclaw.plugin.json`；省略时使用内置默认值。
+可选字段 `baseUrl`、`timeout`、`llmApiKey`、`llmBaseUrl` 的完整说明见 `openclaw.plugin.json`。`baseUrl`、`timeout` 省略时使用内置默认值；LLM 相关字段默认不配置，按需填写。
+
+当使用 Z.AI 作为 LLM 提供商时，建议配置：
+- `llmApiKey`：你的 Z.AI API Key
+- `llmBaseUrl`：`https://open.bigmodel.cn/api/paas/v4`
 
 ## 工具一览
 
@@ -142,9 +169,11 @@ device_id      : string  - 设备唯一 ID（推荐）
 user_device_id : number  - 用户设备 ID（兼容字段，device_id 优先）
 session_id     : string  - 可选会话 ID，用于流式内容持久化
 lang           : string  - 语言提示："cn"（默认）或 "en"
+api_key        : string  - 可选 LLM 提供商 API Key；若传入则覆盖插件级 llmApiKey
+base_url       : string  - 可选 LLM 提供商 Base URL；若传入则覆盖插件级 llmBaseUrl
 ```
 
-### `cloudphone_task_result`
+**`cloudphone_execute_and_wait`** 使用相同参数定义（同一套 schema）。
 
 ```text
 task_id    : number - cloudphone_execute 返回的任务 ID（必填）
@@ -220,7 +249,14 @@ device_id : string - 设备唯一 ID（必填）
 
 ## 更新日志
 
-当前版本：**v2026.4.14**
+当前版本：**v2026.4.14001**
+
+### v2026.4.14001
+
+- 补充插件配置说明：支持可选默认 LLM 提供商字段 `llmApiKey`、`llmBaseUrl`
+- 增加 OpenClaw 控制台可选 LLM 配置说明，并补充 Z.AI API 文档参考链接
+- 对齐 `cloudphone_execute_and_wait` 与 `cloudphone_execute` 的参数定义，明确支持 `api_key`、`base_url` 覆盖
+- 同步 package/plugin/doc 的版本标识到 `v2026.4.14001`
 
 ### v2026.4.14
 

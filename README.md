@@ -22,7 +22,7 @@ openclaw plugins update @suqiai/cloudphone
 
 ### 2. Configure the plugin
 
-Set **`apikey`** in `plugins.entries.cloudphone.config`. The plugin uses built-in defaults for other optional settings.
+Set **`apikey`** in `plugins.entries.cloudphone.config`. The plugin uses built-in defaults for other optional settings. If you need a **default LLM provider** for the cloud phone automation agent (backend), add optional **`llmApiKey`** and **`llmBaseUrl`** as well.
 
 #### Option A: Configuration file (openclaw.json)
 
@@ -45,11 +45,31 @@ Add the following configuration to `openclaw.json`:
 }
 ```
 
+Optional — default LLM credentials for automation (omit if the backend supplies its own):
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "cloudphone": {
+        "enabled": true,
+        "config": {
+          "apikey": "your CloudPhone apikey",
+          "llmApiKey": "sk-xxx",
+          "llmBaseUrl": "https://open.bigmodel.cn/api/paas/v4"
+        }
+      }
+    }
+  }
+}
+```
+
 #### Option B: OpenClaw Console UI
 
 1. Open the OpenClaw console in your browser.
 2. Go to the Plugins section, find **CloudPhone** and enable it.
 3. Set **apikey** (from [https://ai.suqi.tech](https://ai.suqi.tech) after login or sign-up, in your account/settings).
+4. Optionally set **LLM API Key** and **LLM Base URL** if you want plugin-level default LLM settings for automation. For Z.AI usage, you can follow [Z.AI API Introduction](https://docs.bigmodel.cn/cn/api/introduction) to create an API key.
 
 Screenshots:
 
@@ -80,10 +100,16 @@ The agent no longer needs to directly control UI coordinates, manage screenshots
 | Field | Type | Required | Default | Description |
 |------|------|------|--------|------|
 | `apikey` | string | Yes | - | Authorization credential (ApiKey) |
+| `llmApiKey` | string | No | - | Default LLM provider API key for cloud phone automation (sensitive; omit if not needed). For Z.AI, create it from [Z.AI API Introduction](https://docs.bigmodel.cn/cn/api/introduction). |
+| `llmBaseUrl` | string | No | - | Default LLM provider base URL for cloud phone automation. Example for Z.AI: `https://open.bigmodel.cn/api/paas/v4`. |
 
 > Obtain your API Key by logging in or signing up at [https://ai.suqi.tech](https://ai.suqi.tech), then find it in your account/settings.
 
-Optional fields such as `baseUrl` and `timeout` are documented in `openclaw.plugin.json` and use built-in defaults when omitted.
+Optional fields `baseUrl`, `timeout`, `llmApiKey`, and `llmBaseUrl` are fully described in `openclaw.plugin.json`. `baseUrl` and `timeout` use built-in defaults when omitted; LLM fields are omitted by default unless you configure them.
+
+When using Z.AI as the LLM provider, set:
+- `llmApiKey`: your Z.AI API key
+- `llmBaseUrl`: `https://open.bigmodel.cn/api/paas/v4`
 
 ## Tool Overview
 
@@ -149,7 +175,11 @@ device_id      : string  - Device unique ID (recommended)
 user_device_id : number  - User device ID (compatibility, device_id takes priority)
 session_id     : string  - Optional session ID for streaming persistence
 lang           : string  - Language hint: "cn" (default) or "en"
+api_key        : string  - Optional LLM provider API key; overrides plugin-level llmApiKey when set
+base_url       : string  - Optional LLM provider base URL; overrides plugin-level llmBaseUrl when set
 ```
+
+The same parameters apply to **`cloudphone_execute_and_wait`** (it uses the same schema).
 
 ### `cloudphone_task_result`
 
@@ -227,7 +257,14 @@ Required call order:
 
 ## Changelog
 
-Current version: **v2026.4.14**
+Current version: **v2026.4.14001**
+
+### v2026.4.14001
+
+- Clarified plugin setup docs to include optional default LLM provider fields: `llmApiKey` and `llmBaseUrl`
+- Added OpenClaw UI configuration guidance and Z.AI reference link for optional LLM provider credentials
+- Documented `cloudphone_execute_and_wait` parameter parity with `cloudphone_execute`, including `api_key` and `base_url` overrides
+- Synced package/plugin/doc version references to `v2026.4.14001`
 
 ### v2026.4.14
 
