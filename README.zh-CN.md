@@ -171,6 +171,8 @@ session_id     : string  - 可选会话 ID，用于流式内容持久化
 lang           : string  - 语言提示："cn"（默认）或 "en"
 api_key        : string  - 可选 LLM 提供商 API Key；若传入则覆盖插件级 llmApiKey
 base_url       : string  - 可选 LLM 提供商 Base URL；若传入则覆盖插件级 llmBaseUrl
+max_steps      : integer - 可选，云手机 Agent 单任务最大步骤数（取值范围 1-200）。
+                           未传入时按 "插件级 maxSteps > 内置默认 50" 的顺序回落。
 ```
 
 **`cloudphone_execute_and_wait`** 使用相同参数定义（同一套 schema）。
@@ -249,7 +251,15 @@ device_id : string - 设备唯一 ID（必填）
 
 ## 更新日志
 
-当前版本：**v2026.4.14001**
+当前版本：**v2026.4.20**
+
+### v2026.4.20
+
+- 新增可选插件配置 `maxSteps`（取值范围 1-200，默认 50），用于限制云手机 Agent 单任务最大步骤数
+- 为 `cloudphone_execute` / `cloudphone_execute_and_wait` 增加可选参数 `max_steps`（范围 1-200），按调用粒度覆盖插件级 `maxSteps`
+- 按 "调用入参 > 插件配置 > 内置默认 50" 的优先级解析最终生效的 `max_steps`，并始终透传至后端请求体
+- 在 `cloudphone_execute` 的启动日志中附带当次生效的 `max_steps`，便于排查
+- 同步 package/plugin/doc 的版本标识到 `v2026.4.20`
 
 ### v2026.4.14001
 

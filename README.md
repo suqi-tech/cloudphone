@@ -177,6 +177,8 @@ session_id     : string  - Optional session ID for streaming persistence
 lang           : string  - Language hint: "cn" (default) or "en"
 api_key        : string  - Optional LLM provider API key; overrides plugin-level llmApiKey when set
 base_url       : string  - Optional LLM provider base URL; overrides plugin-level llmBaseUrl when set
+max_steps      : integer - Optional maximum number of Agent steps for this task (range 1-200).
+                           When omitted, falls back to plugin-level `maxSteps`, then the built-in default 50.
 ```
 
 The same parameters apply to **`cloudphone_execute_and_wait`** (it uses the same schema).
@@ -257,7 +259,15 @@ Required call order:
 
 ## Changelog
 
-Current version: **v2026.4.14001**
+Current version: **v2026.4.20**
+
+### v2026.4.20
+
+- Added optional plugin config `maxSteps` (1-200, default 50) to cap the number of steps the cloud phone Agent may execute per task
+- Extended `cloudphone_execute` / `cloudphone_execute_and_wait` with an optional `max_steps` parameter (range 1-200) that overrides the plugin-level `maxSteps` on a per-call basis
+- Resolved the effective `max_steps` using the priority: call parameter > plugin config > built-in default (50), and always forwarded it to the backend request body
+- Included the effective `max_steps` value in `cloudphone_execute` start logs for easier diagnosis
+- Synced package/plugin/doc version references to `v2026.4.20`
 
 ### v2026.4.14001
 
