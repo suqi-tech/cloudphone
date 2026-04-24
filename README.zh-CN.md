@@ -118,6 +118,7 @@ Agent 不再需要直接控制 UI 坐标、管理截图或逐一调用 tap/swipe
 | `cloudphone_list_devices` | 获取云手机设备列表，支持分页、关键字搜索和状态筛选 |
 | `cloudphone_get_device_info` | 获取指定设备的详细信息 |
 | `cloudphone_get_device_screenshot_url` | 按 `device_id` 获取最新截图 URL（默认可用；仅用户触发） |
+| `cloudphone_create_share_link` | 按 `device_id` 生成设备串流分享链接（默认可用；仅用户触发） |
 
 ### AI Agent 任务执行
 
@@ -204,7 +205,7 @@ size    : integer - 每页条数，默认 20
 ### `cloudphone_get_device_info`
 
 ```text
-user_device_id : number - 用户设备 ID（必填）
+device_id : string - 设备唯一 ID（32 位 hex 不透明 ID，必填）
 ```
 
 ### `cloudphone_get_device_screenshot_url`
@@ -217,6 +218,42 @@ device_id : string - 设备唯一 ID（必填）
 - 插件安装后该工具默认可用，无需额外白名单开启。
 - 仅在用户明确要求获取截图 URL 时调用，禁止自主触发。
 - 返回的 `screenshot_url` 为上游原样透传，应视为敏感的临时凭证链接。
+
+### `cloudphone_create_share_link`
+
+```text
+device_id : string - 设备唯一 ID（32 位 hex 不透明 ID，必填）。
+                     通常来自 cloudphone_list_devices 返回值中的 device_id 字段。
+```
+
+**返回字段：**
+
+```text
+ok        : boolean - 操作是否成功
+device_id : string  - 输入的 device_id 回显
+share_url : string  - 设备串流分享链接（带签名，敏感凭证；成功时返回）
+code      : string  - 失败时的错误码（INVALID_PARAMS / HTTP_ERROR / INVALID_UPSTREAM_PAYLOAD 等）
+message   : string  - 失败时的错误信息
+```
+
+说明：
+- 插件安装后该工具默认可用，无需额外白名单开启。
+- 仅在用户明确要求生成/获取分享链接时调用，禁止自主触发。
+- 返回的 `share_url` 为上游原样透传（含签名查询串），应视为敏感凭证链接：时效有限、禁止对外二次转发，也不应完整出现在日志中。
+- 入参 `device_id` 为 32 位 hex 不透明标识（非十进制数值），不存在长整型精度问题。
+- 请求体字段名与入参一致（`device_id`，snake_case），内部不做字段名或数值转换。
+- **后端契约**：需要后端 `/openapi/v1/devices/create/share/link` 与 `/openapi/v1/devices/info` 已完成"接受 `device_id`"的改造；未升级的后端会返回业务错误。
+
+### 使用示例：获取设备分享链接
+
+> 帮我把设备 `xxxxxx` 生成一个分享链接（`xxxxxx` 为设备的 32 位 hex `device_id`）
+
+Agent 会：
+1. 识别到用户"显式请求分享链接"
+2. 调用 `cloudphone_create_share_link`，`device_id: "a1b2c3d4e5f67890a1b2c3d4e5f67890"`
+3. 将返回的 `share_url` 回填到聊天框
+
+若用户未提供具体设备 ID，Agent 可先调用 `cloudphone_list_devices` 或 `cloudphone_get_device_info` 协助用户确认目标设备（以 `device_id` 为键）后再生成分享链接。
 
 ## 常见问题
 
@@ -251,7 +288,17 @@ device_id : string - 设备唯一 ID（必填）
 
 ## 更新日志
 
-当前版本：**v2026.4.20**
+当前版本：**v2026.4.24**
+
+### v2026.4.24
+
+- 新增 Agent 工具 `cloudphone_create_share_link`，按 `device_id` 生成设备带签名的串流分享链接（默认可用；仅在用户显式请求时调用）
+- `cloudphone_get_device_info` 入参由 `user_device_id`（number）切换为 `device_id`（32 位 hex 字符串），与插件其他工具统一的不透明设备标识保持一致
+- 引入 `json-bigint` 作为全插件统一的上游响应 / SSE 事件（`agent_thinking` / `task_result` / `error`）JSON 解析器，避免 19 位雪花 ID 等 long 字段在解析过程中被转为 `Number` 导致精度丢失
+- 强化 `normalizeTaskId`：同时兼容 `string` 与 `number` 输入，对超过安全整数区间的数字字符串显式拒绝，避免静默截断
+- 为所有上游响应增加统一的防御性 JSON 解析错误分支，负载解析失败时返回结构化错误而非抛异常
+- 新增依赖 `json-bigint` 及其类型声明 `@types/json-bigint`
+- 同步 package/plugin/doc 的版本标识到 `v2026.4.24`
 
 ### v2026.4.20
 

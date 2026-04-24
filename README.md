@@ -123,6 +123,7 @@ After the plugin is installed, the agent automatically gets the following tools.
 | `cloudphone_list_devices` | List cloud phone devices with pagination, keyword search, and status filters |
 | `cloudphone_get_device_info` | Get detailed information for a specific device |
 | `cloudphone_get_device_screenshot_url` | Get the latest screenshot URL by `device_id` (default-enabled; user-trigger only) |
+| `cloudphone_create_share_link` | Generate a device streaming share link by `device_id` (default-enabled; user-trigger only) |
 
 
 ### AI Agent task execution
@@ -212,7 +213,7 @@ size    : integer - Items per page, default 20
 ### `cloudphone_get_device_info`
 
 ```text
-user_device_id : number - User device ID (required)
+device_id : string - Device unique ID (32-char hex opaque identifier, required)
 ```
 
 ### `cloudphone_get_device_screenshot_url`
@@ -225,6 +226,42 @@ Notes:
 - This tool is available by default after plugin installation (no extra whitelist enablement required).
 - Call this tool only when the user explicitly requests a screenshot URL.
 - The returned `screenshot_url` is passed through as-is from upstream and should be treated as a sensitive temporary credential URL.
+
+### `cloudphone_create_share_link`
+
+```text
+device_id : string - Device unique ID (32-char hex opaque identifier, required).
+                     Typically obtained from the `device_id` field of cloudphone_list_devices.
+```
+
+**Response fields:**
+
+```text
+ok         : boolean  - Whether the operation succeeded
+device_id  : string   - Echo of the input device_id
+share_url  : string   - Device streaming share link (signed, sensitive; present on success)
+code       : string   - Error code on failure (INVALID_PARAMS / HTTP_ERROR / INVALID_UPSTREAM_PAYLOAD, etc.)
+message    : string   - Error message on failure
+```
+
+Notes:
+- This tool is available by default after plugin installation (no extra whitelist enablement required).
+- Call this tool only when the user explicitly requests a share link.
+- The returned `share_url` is passed through as-is from upstream (including signed query parameters) and must be treated as a sensitive credential URL: it may expire, must not be re-distributed without the user's consent, and must never be logged in full.
+- `device_id` is a 32-character hex opaque identifier (not a decimal number), so there is no long-integer precision concern at the LLM / tool-call layer.
+- The request body field name mirrors the input parameter exactly (`device_id`, snake_case); the plugin performs no field-name or numeric conversion.
+- **Backend contract**: requires `/openapi/v1/devices/create/share/link` and `/openapi/v1/devices/info` to accept `device_id`. Gateways with un-upgraded backends will return a business error.
+
+### Usage example: generate a device share link
+
+> Please generate a share link for device `xxxxxx` (`xxxxxx` being the device's 32-char hex `device_id`)
+
+The agent will:
+1. Recognize the user's explicit share-link request.
+2. Call `cloudphone_create_share_link` with `device_id: "a1b2c3d4e5f67890a1b2c3d4e5f67890"`.
+3. Echo the returned `share_url` back in the chat.
+
+If the user does not provide a specific device ID, the agent can first call `cloudphone_list_devices` or `cloudphone_get_device_info` (keyed by `device_id`) to help the user pick the target device before generating the share link.
 
 ## FAQ
 
@@ -259,7 +296,17 @@ Required call order:
 
 ## Changelog
 
-Current version: **v2026.4.20**
+Current version: **v2026.4.24**
+
+### v2026.4.24
+
+- Added new agent tool `cloudphone_create_share_link` to generate a signed streaming share link for a specific device by `device_id` (default-enabled; explicit user-trigger only)
+- Migrated `cloudphone_get_device_info` parameter from `user_device_id` (number) to `device_id` (32-char hex string) to align with the opaque device identifier used across the plugin
+- Adopted `json-bigint` as the shared JSON parser for all upstream API responses and SSE events (`agent_thinking` / `task_result` / `error`), preventing precision loss for 19-digit snowflake IDs and other long integers
+- Hardened `normalizeTaskId` to safely accept both `string` and `number` inputs, rejecting oversized numeric strings instead of silently truncating
+- Added a shared, defensive JSON-parse error path for upstream responses: malformed payloads now return a structured error instead of throwing
+- Added `json-bigint` (and its `@types/json-bigint`) as a dependency of the plugin
+- Synced package/plugin/doc version references to `v2026.4.24`
 
 ### v2026.4.20
 

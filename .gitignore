@@ -2,10 +2,7 @@ node_modules/
 dist/
 .cursor/
 docs/
-/.idea/.gitignore
-/.idea/cloudphone.iml
-/.idea/compiler.xml
-/.idea/editorJumperProjectSettings.xml
-/.idea/misc.xml
-/.idea/modules.xml
-/.idea/vcs.xml
+openspec/
+.idea/
+src/tools.serial-gating.test.ts
+/src/tools.precision.test.ts
